@@ -1,0 +1,370 @@
+---
+title: "Deskriptive Statistik und Regressionen"
+author: "Lena Ziegler und Alexandra Grau"
+date: "10/9/2019"
+output: 
+  html_document: 
+    fig_caption: yes
+    toc: yes
+    number_sections: false
+    toc_depth: 4
+    fig.retina: 4
+    fig.caption: true
+    fig.width: 12
+    fig.height: 4
+    code_folding: show
+    df_print: paged
+    toc_float: 
+      collapsed:  false
+      smooth_scroll: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Libraries
+
+```{r}
+library(tidyverse)
+library(scales)
+library(leaps)
+library(MASS)
+library(caret)
+library(ridge)
+library(randomForest)
+library(caTools)
+library(e1071)
+library(glmnet)
+library(pROC)
+library(ggplot2)
+library(sjPlot)
+library(tadaatoolbox)
+library(broom)
+options(scipen = 999)
+
+```
+
+
+## Read data file
+
+```{r}
+ts_new_york_tbl <- read_csv("ts_new_york.csv") %>%
+ dplyr::select(-1, -2, -3, -6, -13, -14, -15,-16)
+```
+
+
+#shows the entire data set
+```{r}
+ts_new_york_tbl
+```
+
+
+#shows the first 7 rows
+```{r}
+head(ts_new_york_tbl)
+```
+
+
+#shows the last 7 rows
+```{r}
+tail(ts_new_york_tbl)
+```
+
+
+#shows the variable names and types
+```{r}
+str(ts_new_york_tbl)
+```
+
+## Some Visualizations
+
+### Exploring the boroughs contained in the data set
+
+```{r}
+ts_new_york_tbl %>% 
+  filter(!borough == "NA") %>% 
+  group_by(borough) %>% 
+  summarise(Count = n()) %>% 
+  ggplot(mapping = aes(x = reorder(borough, Count), y = Count, fill = borough)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  labs(title = "Boroughs of New York",
+       subtitle = "AirBnBs per Borough",
+       x = "Boroughs", y = "Count") +
+  theme_tadaa()
+```
+
+### Exploring the room types
+
+```{r}
+ts_new_york_tbl %>% 
+  filter(!room_type == "NA") %>% 
+  group_by(room_type) %>% 
+  summarise(Freq = n()) %>% 
+mutate(prop = Freq/sum(Freq)) %>% 
+  filter(Freq != 0) %>% 
+  
+  ggplot(mapping = aes(x = 2, y = prop, fill = room_type))+
+  geom_bar(width = 1, color = "white", stat = "identity") +
+  xlim(0.5, 2.5) +
+  coord_polar(theta = "y", start = 0) +
+  theme_void() +
+  scale_y_continuous(labels = percent) +
+  geom_text(aes(label = paste0(round(prop*100, 1), "%")), size = 3.5, position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Blues", direction = 1) +
+  #theme(axis.text.x = element_text(angle = 90), legend.position = "top")+
+  labs(title = "Room types",
+       x = "",
+       y = "",
+       fill = "Key") +
+  theme(legend.position = "right")
+```
+
+### Exploring price and satisfaction
+```{r}
+ggplot(data = ts_new_york_tbl, aes(x = price, y = overall_satisfaction, color = room_type)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set2") +
+  ggtitle(" Price and Overall Satisfaction") +
+  xlab("Price") +
+  ylab("Overall Satisfaction")
+```
+
+### Average Rent in different Borough for different apartment types
+
+```{r}
+ts_new_york_tbl %>%
+  filter(!room_type == "NA") %>% 
+  group_by(room_type, borough) %>% 
+  summarise(avePrice = mean(price, na.rm = TRUE)) %>% 
+  ggplot(mapping = aes(x = reorder(borough, avePrice), y = avePrice, fill = room_type)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  facet_wrap(. ~ room_type, scales = "free_y") +
+  labs(x = "Borough",
+       y = "Average Price") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1.1, hjust = 1.0))
+```
+
+
+### Exploring the distribution of the price variable
+
+```{r}
+ts_new_york_tbl %>% 
+  filter(!price == "NA") %>% 
+  ggplot(mapping = aes(x = price)) +
+  geom_histogram(fill = "#DA9112", bins = 50, stat = "density", alpha = 0.6) +
+  labs(x = "Price",
+       y = "Count")+
+  theme_bw()+
+    scale_x_continuous(labels = scales::comma)
+```
+
+### Exploring the relationship between reviews score and price
+
+```{r}
+
+ts_new_york_tbl %>% 
+  filter(!reviews == "NA", !price == "NA") %>% 
+  ggplot(mapping = aes(x = reviews, y = price)) +
+  geom_point(color = "steelblue") +
+  labs(x = "Reviews",
+       y = "Price")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 0)) +
+    scale_y_continuous(labels = scales::comma)
+
+```
+
+
+### Exploring the relationship among the variables
+
+```{r}
+ts_new_york_tbl %>% 
+  dplyr::select(-room_type, -borough) %>% 
+  cor(., use = "pairwise.complete.obs") %>% 
+  ggcorrplot::ggcorrplot(., method = "square", type = "lower",hc.order = TRUE,outline.color = "white",ggtheme = ggplot2::theme_gray(),lab = TRUE)
+```
+
+### Have a look at Price and Overall Satisfaction
+```{r}
+ggplot(ts_new_york_tbl, aes(x=price, y=overall_satisfaction)) +
+  geom_smooth(method ="lm") +
+  coord_cartesian() +
+  scale_color_gradient() +
+  theme_bw() +
+  ggtitle(" Price and Overall Satisfaction") +
+  xlab("Price") +
+  ylab("Overall Satisfaction")
+```
+
+### Have a look at Price and Bedrooms
+```{r}
+ggplot(ts_new_york_tbl, aes(x=price, y=bedrooms)) +
+  geom_smooth(method ="lm") +
+  coord_cartesian() +
+  scale_color_gradient() +
+  theme_bw() +
+  ggtitle(" Price and Bedrooms") +
+  xlab("Price") +
+  ylab("Bedrooms")
+```
+
+
+
+## Exploring different linear models
+### Linear regression
+
+```{r}
+ts_new_york_tbl <- ts_new_york_tbl
+model1 <- lm(price ~ ., data = ts_new_york_tbl, na.action = "na.omit")
+tab_model(model1)
+summary(model1)
+```
+
+
+#### Plotting variable importance for the linear model object
+
+```{r}
+varImptest <- varImp(model1)
+variables <- row.names(varImptest)
+effect <- varImptest$Overall
+
+varImp_tbl <- bind_cols(variables = variables, effect = effect)
+
+varImp_tbl %>% 
+  ggplot(mapping = aes(x = reorder(variables, effect), y = effect)) +
+  geom_col(width = 0.6, fill = "steelblue") +
+  coord_flip() +
+  theme_bw() +
+  labs(x = "Explanatory variables",
+       y = "Effect size")
+
+```
+
+
+### Stepwise Linear Regression
+
+```{r}
+model1 <- lm(price ~ ., data = ts_new_york_tbl, na.action = "na.omit")
+stepModel <- step(model1)
+summary(stepModel)
+tab_model(stepModel)
+```
+
+
+#### Plotting variable importance for the stepwise linear model object
+
+```{r}
+varImptest <- varImp(stepModel)
+variables <- row.names(varImptest)
+effect <- varImptest$Overall
+
+varImp_tbl <- bind_cols(variables = variables, effect = effect)
+
+varImp_tbl %>% 
+  ggplot(mapping = aes(x = reorder(variables, effect), y = effect)) +
+  geom_col(width = 0.6, fill = "#C9146C") +
+  coord_flip() +
+  theme_bw() +
+  labs(x = "Explanatory variables",
+       y = "Effect size")
+
+```
+
+### Split into Train and Validation sets
+## Training Set : Validation Set = 70 : 30 (random)
+```{r}
+set.seed(100)
+train <- sample(nrow(ts_new_york_tbl), 0.7*nrow(ts_new_york_tbl), replace = FALSE)
+TrainSet <- ts_new_york_tbl[train,]
+ValidSet <- ts_new_york_tbl[-train,]
+summary(TrainSet)
+summary(ValidSet)
+```
+
+### Create a Ridge Regression with splitted data
+```{r fig.width=10, fig.height=7}
+
+model3 <- linearRidge(price ~ ., data = TrainSet, importance = TRUE) 
+model3
+
+```
+
+
+### Support Vector Machine (SVM) | Radial Kernel
+
+```{r}
+
+model5 <- svm(price ~ ., data = TrainSet, na.action = na.omit, kernel = "radial")
+
+model5
+
+```
+
+
+### Support Vector Machine (SVM) | Polynomial Kernel
+
+```{r}
+
+model6 <- svm(price ~ ., data = TrainSet, na.action = na.omit, kernel = "polynomial", degree = 4)
+
+model6
+
+```
+
+### Random Forest
+
+
+```{r}
+model10 <- randomForest(price ~ ., data = dplyr::select(TrainSet, 
+                                                       -room_type, -borough), 
+                       na.action = na.omit, ntree = 500, mtry = 5, importance = TRUE)
+model10
+```
+
+```{r}
+# Predicting on train set
+predTrain <- predict(model10, TrainSet, type = "class")
+# Checking classification accuracy
+table(predTrain, TrainSet$price)  
+```
+
+
+```{r}
+# Predicting on Validation set
+predValid <- predict(model10, ValidSet, type = "class")
+# Checking classification accuracy
+mean(predValid == ValidSet$price)                    
+table(predValid,ValidSet$price)
+```
+
+
+```{r}
+# To check important variables
+importance(model10)        
+varImpPlot(model10)   
+```
+
+                       
+
+```{r}
+# Using For loop to identify the right mtry for model
+a=c()
+i=5
+for (i in 3:8) {
+  model11 <- randomForest(price ~ ., data = dplyr::select(TrainSet, 
+                                                       -room_type, -borough), 
+                       na.action = na.omit, ntree = 500, mtry = 6, importance = TRUE, ylim=c(0,300))
+  predValid <- predict(model11, ValidSet, type = "class")
+  a[i-2] = mean(predValid == ValidSet$price)
+}
+ 
+a
+
+plot(model11)
+
+```
+
+
+
